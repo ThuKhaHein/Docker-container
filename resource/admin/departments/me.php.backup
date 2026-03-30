@@ -1,0 +1,820 @@
+<?php
+
+include '../auth.php';
+include '../../db.php';
+include 'diesel_utils.php';
+
+$role = strtolower(trim($_SESSION['role'] ?? ''));
+$department = strtolower(trim($_SESSION['department'] ?? ''));
+
+if(!in_array($role, ['admin', 'manager'])){
+    header("Location: /admin/login.php");
+    exit();
+}
+
+if($role === 'manager' && ($department !== 'm&e' && $department !== 'me')){
+    echo "Access Denied";
+    exit();
+}
+
+// Get dashboard data
+$dashboardData = getDieselDashboardData($conn, []);
+$allRecords = getDieselRecords($conn);
+
+// Handle AJAX requests
+if(isset($_POST['action'])) {
+    header('Content-Type: application/json');
+
+    if($_POST['action'] === 'get_dashboard_data') {
+        $filters = [];
+        if(!empty($_POST['start_date'])) $filters['startDate'] = $_POST['start_date'];
+        if(!empty($_POST['end_date'])) $filters['endDate'] = $_POST['end_date'];
+
+        $data = getDieselDashboardData($conn, $filters);
+        echo json_encode($data);
+        exit;
+    }
+
+    if($_POST['action'] === 'save_record') {
+        $result = saveDieselRecord($conn, $_POST);
+        echo json_encode($result);
+        exit;
+    }
+
+    if($_POST['action'] === 'delete_record') {
+        $result = deleteDieselRecord($conn, $_POST['id']);
+        echo json_encode($result);
+        exit;
+    }
+
+    if($_POST['action'] === 'get_records') {
+        $records = getDieselRecords($conn);
+        echo json_encode($records);
+        exit;
+    }
+}
+
+include '../templates/header.php';
+$hasSidebar = ($role === 'admin');
+if($hasSidebar){
+    include '../templates/sidebar.php';
+}
+
+?>
+
+<div class="main-content <?php echo $hasSidebar ? '' : 'no-sidebar'; ?>">
+
+<div class="topbar">
+    <h3>M&E Department - Diesel Inventory Dashboard</h3>
+    <div style="display: flex; gap: 0.5rem;">
+        <button class="btn btn-outline-primary btn-sm" onclick="showPage('dashboard')">Dashboard</button>
+        <button class="btn btn-outline-secondary btn-sm" onclick="showPage('inventory')">Manage Inventory</button>
+        <?php if(!$hasSidebar): ?>
+        <a href="/admin/logout.php" class="btn btn-warning btn-sm">Logout</a>
+        <?php endif; ?>
+    </div>
+</div>
+
+<div class="content-wrapper">
+
+    <!-- Dashboard Page -->
+    <div id="dashboard-page" class="page active">
+        <!-- Filter Bar -->
+        <div class="filter-bar card">
+            <div class="filter-group">
+                <label for="start-date">Start Date</label>
+                <input type="date" id="start-date">
+            </div>
+            <div class="filter-group">
+                <label for="end-date">End Date</label>
+                <input type="date" id="end-date">
+            </div>
+            <div class="filter-actions">
+                <button class="btn-primary" onclick="applyDashboardFilter()">Apply</button>
+                <button class="btn-secondary" onclick="resetDashboardFilter()">Reset</button>
+            </div>
+        </div>
+
+        <!-- Scorecards -->
+        <div class="scorecard-grid">
+            <div class="scorecard card">
+                <div class="scorecard-icon" style="background-color: rgba(13, 110, 253, 0.1);">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#0d6efd" width="30" height="30">
+                        <path d="M5 20h14v2H5v-2zm7-18c-3.2 0-5 2.6-5 5.5s3.2 9.5 5 9.5 5-6.3 5-9.5S15.2 2 12 2z"/>
+                    </svg>
+                </div>
+                <div class="scorecard-text">
+                    <h3>Current Stock</h3>
+                    <p><span id="current-stock"><?php echo htmlspecialchars($dashboardData['scorecards']['currentStock']); ?></span> L</p>
+                </div>
+            </div>
+            <div class="scorecard card">
+                <div class="scorecard-icon" style="background-color: rgba(25, 135, 84, 0.1);">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#198754" width="30" height="30">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15H9v-2h2v2zm0-4H9V7h2v6zm4 4h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                    </svg>
+                </div>
+                <div class="scorecard-text">
+                    <h3>Received (Filtered)</h3>
+                    <p><span id="total-received"><?php echo htmlspecialchars($dashboardData['scorecards']['totalReceived']); ?></span> L</p>
+                </div>
+            </div>
+            <div class="scorecard card">
+                <div class="scorecard-icon" style="background-color: rgba(220, 53, 69, 0.1);">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#dc3545" width="30" height="30">
+                        <path d="M15 4H9v2h6V4zm-2 16h-2v-2h2v2zM12 6C9.24 6 7 8.24 7 11v5h2v-1h6v1h2v-5c0-2.76-2.24-5-5-5zm3 5h-2v-2h2v2z"/>
+                    </svg>
+                </div>
+                <div class="scorecard-text">
+                    <h3>Usage (Filtered)</h3>
+                    <p><span id="total-usage"><?php echo htmlspecialchars($dashboardData['scorecards']['totalUsage']); ?></span> L</p>
+                </div>
+            </div>
+            <div class="scorecard card">
+                <div class="scorecard-icon" style="background-color: rgba(255, 193, 7, 0.1);">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ffc107" width="30" height="30">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 15c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1s1 .45 1 1v4c0 .55-.45 1-1 1zm-1-8V7h2v2h-2z"/>
+                    </svg>
+                </div>
+                <div class="scorecard-text">
+                    <h3>Avg. Usage/Entry</h3>
+                    <p><span id="avg-usage"><?php echo htmlspecialchars($dashboardData['scorecards']['avgUsage']); ?></span> L</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="dashboard-main-grid">
+            <div class="chart-container card">
+                <h3>Monthly Usage</h3>
+                <canvas id="monthlyUsageChart"></canvas>
+            </div>
+            <div class="chart-container card">
+                <h3>Usage by Equipment</h3>
+                <canvas id="usageByEquipmentChart"></canvas>
+            </div>
+            <div class="chart-container card">
+                <h3>Received from Supplier</h3>
+                <canvas id="receivedBySupplierChart"></canvas>
+            </div>
+            <div class="activity-container card">
+                <h3>Recent Activity</h3>
+                <div class="table-wrapper">
+                    <table id="recent-activity-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Qty</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (!empty($dashboardData['recentActivity'])): ?>
+                                <?php foreach ($dashboardData['recentActivity'] as $activity): ?>
+                                    <tr>
+                                        <td><?php echo htmlspecialchars($activity['date']); ?></td>
+                                        <td><?php echo htmlspecialchars($activity['type']); ?></td>
+                                        <td><?php echo htmlspecialchars($activity['quantity']); ?></td>
+                                        <td><?php echo htmlspecialchars($activity['sourceDest']); ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <tr>
+                                    <td colspan="4" style="text-align: center;">No activity in selected range.</td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inventory Management Page -->
+    <div id="inventory-page" class="page">
+        <div class="inventory-grid">
+            <!-- Add/Edit Form -->
+            <div class="form-container card">
+                <h2 id="form-title">Add New Inventory Entry</h2>
+                <form id="inventory-form">
+                    <input type="hidden" id="record-id" name="id">
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="date">Date</label>
+                            <input type="date" id="date" name="date" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="transaction-type">Transaction Type</label>
+                            <select id="transaction-type" name="transactionType" required>
+                                <option value="">-- Select Type --</option>
+                                <option value="Diesel Received">Diesel Received</option>
+                                <option value="Diesel Usage">Diesel Usage</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="received-fields" class="conditional-field">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="supplier-name">Supplier Name</label>
+                                <select id="supplier-name" name="supplierName">
+                                    <option value="">-- Select Supplier --</option>
+                                    <option value="Supplier A">Supplier A</option>
+                                    <option value="Supplier B">Supplier B</option>
+                                    <option value="Supplier C">Supplier C</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="price-per-liter">Price per Liter (Kyats)</label>
+                                <input type="number" id="price-per-liter" name="pricePerLiter" step="0.01">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="usage-fields" class="conditional-field">
+                        <div class="form-group">
+                            <label for="vehicle-equipment">Vehicle/Equipment</label>
+                            <select id="vehicle-equipment" name="vehicleEquipment">
+                                <option value="">-- Select Equipment --</option>
+                                <optgroup label="Vehicles">
+                                    <option value="Truck A">Truck A</option>
+                                    <option value="Truck B">Truck B</option>
+                                    <option value="Van">Van</option>
+                                </optgroup>
+                                <optgroup label="Equipment">
+                                    <option value="Generator 1">Generator 1</option>
+                                    <option value="Generator 2">Generator 2</option>
+                                    <option value="Pump">Pump</option>
+                                </optgroup>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="quantity-liters">Quantity (Liters)</label>
+                        <input type="number" id="quantity-liters" name="quantityLiters" step="0.01" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="notes">Notes (Optional)</label>
+                        <textarea id="notes" name="notes" rows="3"></textarea>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary">Save Entry</button>
+                        <button type="button" class="btn-secondary" onclick="clearForm()">Cancel</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Records Table -->
+            <div class="table-container card">
+                <h2>Transaction Records</h2>
+                <div class="table-wrapper">
+                    <table id="inventory-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Qty (L)</th>
+                                <th>Price/L</th>
+                                <th>Source/Destination</th>
+                                <th>Notes</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventory-tbody">
+                            <?php if (!empty($allRecords)): ?>
+                                <?php foreach (array_slice($allRecords, 0, 10) as $record): ?>
+                                    <tr>
+                                        <td><?php echo htmlspecialchars($record['date']); ?></td>
+                                        <td><?php echo htmlspecialchars($record['transactionType']); ?></td>
+                                        <td><?php echo htmlspecialchars($record['quantityLiters']); ?></td>
+                                        <td><?php echo htmlspecialchars($record['pricePerLiter'] ?? '-'); ?></td>
+                                        <td><?php echo htmlspecialchars($record['sourceOrDestination']); ?></td>
+                                        <td><?php echo htmlspecialchars($record['notes'] ?? '-'); ?></td>
+                                        <td class="actions-cell">
+                                            <button class="btn-edit" onclick="editRecord('<?php echo $record['id']; ?>')">Edit</button>
+                                            <button class="btn-delete" onclick="deleteRecord('<?php echo $record['id']; ?>')">Delete</button>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <tr>
+                                    <td colspan="7" style="text-align: center;">No records found.</td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+</div>
+
+<style>
+/* Enhanced Dashboard Styles */
+.filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 1.5rem;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.filter-group label {
+    font-size: 0.8rem;
+    margin-bottom: 0.25rem;
+    color: #555;
+    font-weight: 500;
+}
+
+.filter-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.scorecard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.scorecard {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.5rem;
+}
+
+.scorecard-icon {
+    flex-shrink: 0;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+}
+
+.scorecard-text h3 {
+    font-size: 1rem;
+    color: #555;
+    margin-bottom: 0.25rem;
+}
+
+.scorecard-text p {
+    font-size: 2rem;
+    font-weight: 600;
+    color: #212529;
+    margin: 0;
+}
+
+.dashboard-main-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+}
+
+.chart-container {
+    height: 350px;
+}
+
+.chart-container canvas {
+    cursor: pointer;
+}
+
+.activity-container {
+    grid-column: 1 / -1;
+}
+
+.page {
+    display: none;
+}
+
+.page.active {
+    display: block;
+}
+
+.inventory-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2rem;
+}
+
+.form-container {
+    order: 1;
+}
+
+.table-container {
+    order: 2;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.conditional-field {
+    display: none;
+}
+
+.conditional-field.full-width {
+    grid-column: 1 / -1;
+}
+
+.form-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.actions-cell {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-edit, .btn-delete {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.85rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.btn-edit {
+    background-color: #ffc107;
+    color: #000;
+}
+
+.btn-delete {
+    background-color: #dc3545;
+    color: #fff;
+}
+
+.btn-primary {
+    background-color: #0d6efd;
+    color: #fff;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.btn-secondary {
+    background-color: #6c757d;
+    color: #fff;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.btn-outline-primary, .btn-outline-secondary {
+    background-color: transparent;
+    border: 1px solid;
+    padding: 0.4rem 0.8rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.btn-outline-primary {
+    color: #0d6efd;
+    border-color: #0d6efd;
+}
+
+.btn-outline-secondary {
+    color: #6c757d;
+    border-color: #6c757d;
+}
+
+@media (max-width: 768px) {
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .scorecard {
+        flex-direction: column;
+        text-align: center;
+        gap: 1rem;
+    }
+
+    .dashboard-main-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    let chartInstances = {};
+    let dashboardData = <?php echo json_encode($dashboardData); ?>;
+    let allRecords = <?php echo json_encode($allRecords); ?>;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        renderDashboard(dashboardData);
+        setupFormHandlers();
+
+        // Set default date to today
+        document.getElementById('date').value = new Date().toISOString().split('T')[0];
+    });
+
+    function showPage(pageId) {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.getElementById(pageId + '-page').classList.add('active');
+
+        document.querySelectorAll('.btn-outline-primary, .btn-outline-secondary').forEach(btn => {
+            btn.classList.remove('active');
+        });
+
+        if(pageId === 'dashboard') {
+            document.querySelector('button[onclick="showPage(\'dashboard\')"]').classList.add('active');
+        } else {
+            document.querySelector('button[onclick="showPage(\'inventory\')"]').classList.add('active');
+        }
+    }
+
+    function applyDashboardFilter() {
+        const startDate = document.getElementById('start-date').value;
+        const endDate = document.getElementById('end-date').value;
+
+        fetch('', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `action=get_dashboard_data&start_date=${startDate}&end_date=${endDate}`
+        })
+        .then(response => response.json())
+        .then(data => {
+            updateDashboard(data);
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error loading dashboard data');
+        });
+    }
+
+    function resetDashboardFilter() {
+        document.getElementById('start-date').value = '';
+        document.getElementById('end-date').value = '';
+        updateDashboard(dashboardData);
+
+        // Update recent activity table
+        const tbody = document.getElementById('recent-activity-table').querySelector('tbody');
+        tbody.innerHTML = '';
+        if(dashboardData.recentActivity && dashboardData.recentActivity.length > 0) {
+            dashboardData.recentActivity.forEach(activity => {
+                const row = tbody.insertRow();
+                row.innerHTML = `
+                    <td>${activity.date}</td>
+                    <td>${activity.type}</td>
+                    <td>${activity.quantity}</td>
+                    <td>${activity.sourceDest}</td>
+                `;
+            });
+        } else {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No activity in selected range.</td></tr>';
+        }
+    }
+
+    function updateDashboard(data) {
+        document.getElementById('current-stock').textContent = data.scorecards.currentStock;
+        document.getElementById('total-received').textContent = data.scorecards.totalReceived;
+        document.getElementById('total-usage').textContent = data.scorecards.totalUsage;
+        document.getElementById('avg-usage').textContent = data.scorecards.avgUsage;
+
+        renderDashboard(data);
+
+        // Update recent activity table
+        const tbody = document.getElementById('recent-activity-table').querySelector('tbody');
+        tbody.innerHTML = '';
+
+        if(data.recentActivity && data.recentActivity.length > 0) {
+            data.recentActivity.forEach(activity => {
+                const row = tbody.insertRow();
+                row.innerHTML = `
+                    <td>${activity.date}</td>
+                    <td>${activity.type}</td>
+                    <td>${activity.quantity}</td>
+                    <td>${activity.sourceDest}</td>
+                `;
+            });
+        } else {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No activity in selected range.</td></tr>';
+        }
+    }
+
+    function renderDashboard(data) {
+        if (data) {
+            renderChart('monthlyUsageChart', 'bar', data.monthlyUsage.labels, data.monthlyUsage.data, 'Liters Used', '#198754');
+            renderChart('usageByEquipmentChart', 'doughnut', data.usageByEquipment.labels, data.usageByEquipment.data);
+            renderChart('receivedBySupplierChart', 'pie', data.receivedBySupplier.labels, data.receivedBySupplier.data);
+        }
+    }
+
+    function renderChart(canvasId, type, labels, data, label = '', color = null) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+
+        if (chartInstances[canvasId]) {
+            chartInstances[canvasId].destroy();
+        }
+
+        const colors = ['#0d6efd', '#6c757d', '#198754', '#ffc107', '#dc3545', '#0dcaf0', '#fd7e14'];
+
+        chartInstances[canvasId] = new Chart(ctx, {
+            type: type,
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: label,
+                    data: data,
+                    backgroundColor: (type === 'doughnut' || type === 'pie') ? colors : (color || '#0d6efd')
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: (type === 'doughnut' || type === 'pie')
+                    }
+                },
+                scales: (type === 'line' || type === 'bar') ? {
+                    y: {
+                        beginAtZero: true
+                    }
+                } : {}
+            }
+        });
+    }
+
+    function setupFormHandlers() {
+        const form = document.getElementById('inventory-form');
+        const transactionType = document.getElementById('transaction-type');
+
+        form.addEventListener('submit', handleFormSubmit);
+        transactionType.addEventListener('change', handleTransactionTypeChange);
+
+        // Initialize form state
+        handleTransactionTypeChange();
+    }
+
+    function handleTransactionTypeChange() {
+        const type = document.getElementById('transaction-type').value;
+        const receivedFields = document.getElementById('received-fields');
+        const usageFields = document.getElementById('usage-fields');
+
+        receivedFields.style.display = 'none';
+        usageFields.style.display = 'none';
+
+        if(type === 'Diesel Received') {
+            receivedFields.style.display = 'block';
+        } else if(type === 'Diesel Usage') {
+            usageFields.style.display = 'block';
+        }
+    }
+
+    function handleFormSubmit(e) {
+        e.preventDefault();
+
+        const formData = new FormData(e.target);
+        formData.append('action', 'save_record');
+
+        fetch('', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(result => {
+            if(result.status === 'success') {
+                alert(result.message);
+                clearForm();
+                loadRecords();
+                // Refresh dashboard data
+                applyDashboardFilter();
+            } else {
+                alert('Error: ' + result.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error saving record');
+        });
+    }
+
+    function editRecord(id) {
+        const record = allRecords.find(r => r.id === id);
+        if(record) {
+            document.getElementById('record-id').value = record.id;
+            document.getElementById('date').value = record.date;
+            document.getElementById('transaction-type').value = record.transactionType;
+            document.getElementById('quantity-liters').value = record.quantityLiters;
+            document.getElementById('notes').value = record.notes || '';
+
+            handleTransactionTypeChange();
+
+            if(record.transactionType === 'Diesel Received') {
+                document.getElementById('supplier-name').value = record.sourceOrDestination;
+                document.getElementById('price-per-liter').value = record.pricePerLiter || '';
+            } else {
+                document.getElementById('vehicle-equipment').value = record.sourceOrDestination;
+            }
+
+            document.getElementById('form-title').textContent = 'Edit Entry';
+            showPage('inventory');
+        }
+    }
+
+    function deleteRecord(id) {
+        if(confirm('Are you sure you want to delete this entry?')) {
+            fetch('', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `action=delete_record&id=${id}`
+            })
+            .then(response => response.json())
+            .then(result => {
+                if(result.status === 'success') {
+                    alert(result.message);
+                    loadRecords();
+                    applyDashboardFilter();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error deleting record');
+            });
+        }
+    }
+
+    function loadRecords() {
+        fetch('', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=get_records'
+        })
+        .then(response => response.json())
+        .then(records => {
+            allRecords = records;
+            updateInventoryTable(records.slice(0, 10));
+        })
+        .catch(error => {
+            console.error('Error:', error);
+        });
+    }
+
+    function updateInventoryTable(records) {
+        const tbody = document.getElementById('inventory-tbody');
+        tbody.innerHTML = '';
+
+        if(records.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No records found.</td></tr>';
+            return;
+        }
+
+        records.forEach(record => {
+            const row = tbody.insertRow();
+            row.innerHTML = `
+                <td>${record.date}</td>
+                <td>${record.transactionType}</td>
+                <td>${record.quantityLiters}</td>
+                <td>${record.pricePerLiter || '-'}</td>
+                <td>${record.sourceOrDestination}</td>
+                <td>${record.notes || '-'}</td>
+                <td class="actions-cell">
+                    <button class="btn-edit" onclick="editRecord('${record.id}')">Edit</button>
+                    <button class="btn-delete" onclick="deleteRecord('${record.id}')">Delete</button>
+                </td>
+            `;
+        });
+    }
+
+    function clearForm() {
+        document.getElementById('inventory-form').reset();
+        document.getElementById('record-id').value = '';
+        document.getElementById('form-title').textContent = 'Add New Inventory Entry';
+        document.getElementById('date').value = new Date().toISOString().split('T')[0];
+        handleTransactionTypeChange();
+    }
+</script>
+
+<?php include '../templates/footer.php'; ?>
